@@ -76,6 +76,12 @@ pub struct Config {
     pub use_proxy: bool,
     #[serde(default = "sb_api")]
     pub sponsorblock_api_url: String,
+    /// Seconds to keep playing into a segment before skipping (0 = skip right away).
+    #[serde(default, deserialize_with = "nullable")]
+    pub skip_delay: f64,
+    /// Seek to this many seconds before the segment ends (0 = skip to the very end).
+    #[serde(default, deserialize_with = "nullable")]
+    pub skip_end_margin: f64,
     /// Unknown keys are kept so saving doesn't drop settings from other versions.
     #[serde(flatten)]
     pub extra: Map<String, Value>,

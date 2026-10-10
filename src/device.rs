@@ -39,6 +39,10 @@ pub struct DeviceListener {
     name: String,
     /// Seconds to skip early.
     offset: f64,
+    /// Seconds to play into a segment before skipping it.
+    skip_delay: f64,
+    /// Land this many seconds before the end of the segment.
+    skip_end_margin: f64,
     mute_ads: bool,
     skip_ads: bool,
     auto_play: bool,
@@ -72,6 +76,8 @@ impl DeviceListener {
             api,
             name: device.name.clone(),
             offset: device.offset / 1000.0,
+            skip_delay: config.skip_delay.max(0.0),
+            skip_end_margin: config.skip_end_margin.max(0.0),
             mute_ads: config.mute_ads,
             skip_ads: config.skip_ads,
             auto_play: config.auto_play,
@@ -335,11 +341,13 @@ impl DeviceListener {
                 state.video_id,
                 segments.len()
             );
-            if let Some((wait, seg)) = self.next_skip(&segments, state.current_time, started) {
+            if let Some((wait, target, seg)) =
+                self.next_skip(&segments, state.current_time, started)
+            {
                 tokio::time::sleep(wait).await;
-                tracing::info!("Skipping segment: seeking to {}", seg.end);
+                tracing::info!("Skipping segment: seeking to {target}");
                 let (seek, _) = tokio::join!(
-                    self.lounge.seek_to(seg.end),
+                    self.lounge.seek_to(target),
                     self.api.mark_viewed_segments(&seg.uuids)
                 );
                 if let Err(e) = seek {
@@ -349,41 +357,61 @@ impl DeviceListener {
         }
     }
 
-    /// Find the next segment to skip and how long to wait before seeking past it.
+    /// Find the next segment to skip, how long to wait, and where to seek to.
     fn next_skip(
         &self,
         segments: &[Segment],
         position: f64,
         started: Instant,
-    ) -> Option<(Duration, Segment)> {
-        let speed = self.st().playback_speed;
-        next_skip(
-            segments,
-            position,
-            started.elapsed().as_secs_f64(),
-            speed,
-            self.offset,
-        )
+    ) -> Option<(Duration, f64, Segment)> {
+        let timing = SkipTiming {
+            elapsed: started.elapsed().as_secs_f64(),
+            speed: self.st().playback_speed,
+            offset: self.offset,
+            delay: self.skip_delay,
+            end_margin: self.skip_end_margin,
+        };
+        next_skip(segments, position, &timing)
     }
 }
 
-/// Pure version of the skip timing logic (port of `time_to_segment`).
+struct SkipTiming {
+    /// Seconds since the playback state was reported.
+    elapsed: f64,
+    speed: f64,
+    /// Device latency compensation (skip this much earlier).
+    offset: f64,
+    /// `skip_delay` from the config.
+    delay: f64,
+    /// `skip_end_margin` from the config.
+    end_margin: f64,
+}
+
+/// Pure version of the skip timing logic (port of `time_to_segment`, extended with
+/// `skip_delay` / `skip_end_margin`). With both at 0 it behaves like the Python version.
 fn next_skip(
     segments: &[Segment],
     position: f64,
-    elapsed: f64,
-    speed: f64,
-    offset: f64,
-) -> Option<(Duration, Segment)> {
+    t: &SkipTiming,
+) -> Option<(Duration, f64, Segment)> {
     for seg in segments {
         // A segment at the very start of the video that we're already inside.
         let within_start =
             position < 1.0 && 1.0 < seg.end && seg.start <= position && position < seg.end;
-        if within_start || seg.start > position {
-            let start = if within_start { position } else { seg.start };
-            let wait = ((start - position - elapsed) / speed) - offset;
-            return Some((Duration::from_secs_f64(wait.max(0.0)), seg.clone()));
+        // The point in the video where we skip. Comparing against this (not the segment
+        // start) keeps a pending delayed skip alive when the TV reports progress mid-delay.
+        let skip_at = seg.start + t.delay;
+        if !(within_start || skip_at > position) {
+            continue;
         }
+        let skip_at = skip_at.max(position);
+        let target = seg.end - t.end_margin;
+        if target <= skip_at {
+            // Delay + margin leave nothing worth skipping; let this segment play.
+            continue;
+        }
+        let wait = ((skip_at - position - t.elapsed) / t.speed) - t.offset;
+        return Some((Duration::from_secs_f64(wait.max(0.0)), target, seg.clone()));
     }
     None
 }
@@ -400,23 +428,71 @@ mod tests {
         }
     }
 
+    fn timing(speed: f64, offset: f64, delay: f64, end_margin: f64) -> SkipTiming {
+        SkipTiming {
+            elapsed: 0.0,
+            speed,
+            offset,
+            delay,
+            end_margin,
+        }
+    }
+
     #[test]
     fn waits_until_next_segment_adjusted_for_speed_and_offset() {
         let segs = [seg(5.0, 8.0), seg(30.0, 40.0)];
-        let (wait, s) = next_skip(&segs, 10.0, 0.0, 2.0, 0.5).unwrap();
+        let (wait, target, s) = next_skip(&segs, 10.0, &timing(2.0, 0.5, 0.0, 0.0)).unwrap();
         assert_eq!(s.start, 30.0);
+        assert_eq!(target, 40.0);
         assert!((wait.as_secs_f64() - 9.5).abs() < 1e-9);
     }
 
     #[test]
     fn skips_immediately_when_inside_opening_segment() {
-        let (wait, s) = next_skip(&[seg(0.0, 12.0)], 0.0, 0.0, 1.0, 0.0).unwrap();
-        assert_eq!(s.end, 12.0);
+        let (wait, target, _) =
+            next_skip(&[seg(0.0, 12.0)], 0.0, &timing(1.0, 0.0, 0.0, 0.0)).unwrap();
+        assert_eq!(target, 12.0);
         assert_eq!(wait, Duration::ZERO);
     }
 
     #[test]
     fn nothing_after_last_segment() {
-        assert!(next_skip(&[seg(5.0, 8.0)], 20.0, 0.0, 1.0, 0.0).is_none());
+        assert!(next_skip(&[seg(5.0, 8.0)], 20.0, &timing(1.0, 0.0, 0.0, 0.0)).is_none());
+    }
+
+    #[test]
+    fn delay_and_end_margin() {
+        let t = timing(1.0, 0.0, 3.0, 1.0);
+        let (wait, target, _) = next_skip(&[seg(30.0, 60.0)], 10.0, &t).unwrap();
+        assert!((wait.as_secs_f64() - 23.0).abs() < 1e-9);
+        assert_eq!(target, 59.0);
+    }
+
+    #[test]
+    fn progress_update_during_delay_keeps_the_skip() {
+        // TV reports 31.5s: inside the segment but before start + delay.
+        let t = timing(1.0, 0.0, 3.0, 1.0);
+        let (wait, target, _) = next_skip(&[seg(30.0, 60.0)], 31.5, &t).unwrap();
+        assert!((wait.as_secs_f64() - 1.5).abs() < 1e-9);
+        assert_eq!(target, 59.0);
+        // After the skip lands at 59s, the same segment isn't skipped again.
+        assert!(next_skip(&[seg(30.0, 60.0)], 59.0, &t).is_none());
+    }
+
+    #[test]
+    fn delay_applies_to_opening_segment() {
+        let t = timing(1.0, 0.0, 3.0, 1.0);
+        let (wait, target, _) = next_skip(&[seg(0.0, 20.0)], 0.4, &t).unwrap();
+        assert!((wait.as_secs_f64() - 2.6).abs() < 1e-9);
+        assert_eq!(target, 19.0);
+    }
+
+    #[test]
+    fn segment_too_short_for_delay_and_margin_is_left_alone() {
+        let t = timing(1.0, 0.0, 3.0, 1.0);
+        let segs = [seg(30.0, 33.5), seg(50.0, 70.0)];
+        let (_, target, s) = next_skip(&segs, 10.0, &t).unwrap();
+        assert_eq!(s.start, 50.0);
+        assert_eq!(target, 69.0);
     }
 }

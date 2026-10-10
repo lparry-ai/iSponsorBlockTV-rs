@@ -60,6 +60,9 @@ Protocol constants worth checking on every re-port: the app id `ytios-phone-20.1
 
 ## Intentional differences
 
+- **New options** `skip_delay` and `skip_end_margin` (seconds, default 0 = upstream
+  behaviour): play into a segment before skipping, and land before its end.
+
 - **Config file permissions**: written `0600` on Unix (it holds the API key and screen ids).
 - **No tokens in logs**: lounge tokens and pairing codes aren't logged, even with `--debug`.
 - **Chunk parsing**: emits a chunk as soon as the buffered text is valid JSON instead of

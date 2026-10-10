@@ -33,6 +33,16 @@ fn yes_no(prompt: &str) -> Option<bool> {
     }
 }
 
+/// Prompt until the user enters a non-negative number.
+fn seconds(prompt: &str) -> f64 {
+    loop {
+        match input(prompt).parse::<f64>() {
+            Ok(n) if n >= 0.0 => return n,
+            _ => println!("Please enter a number of seconds (0 or more)."),
+        }
+    }
+}
+
 fn parse_categories(s: &str) -> Vec<String> {
     s.split([',', ' '])
         .filter(|c| !c.is_empty())
@@ -168,14 +178,19 @@ pub async fn run(data_dir: &Path) -> Result<()> {
     }
 
     if yes_no("Do you want to specify a minimum length of segment to skip? (y/N) ") == Some(true) {
-        config.minimum_skip_length = loop {
-            match input("Enter minimum length of segment to skip in seconds (enter 0 to disable): ")
-                .parse()
-            {
-                Ok(n) => break n,
-                Err(_) => println!("You entered a non-numeric value, try again."),
-            }
-        };
+        config.minimum_skip_length =
+            seconds("Enter minimum length of segment to skip in seconds (enter 0 to disable): ");
+    }
+
+    if yes_no(&format!(
+        "Adjust skip timing? Currently skips {}s into a segment and lands {}s before its end (y/N) ",
+        config.skip_delay, config.skip_end_margin
+    )) == Some(true)
+    {
+        config.skip_delay =
+            seconds("Seconds to keep playing into a segment before skipping (0 = immediately): ");
+        config.skip_end_margin =
+            seconds("Seconds before the end of the segment to land at (0 = the very end): ");
     }
 
     config.skip_count_tracking = yes_no(

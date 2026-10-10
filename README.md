@@ -52,6 +52,12 @@ Network permission for your terminal.
 The file holds your TV screen ids (enough to control playback on that TV) and any YouTube API
 key, so it is written readable only by you. Keep it out of version control.
 
+Skips happen instantly by default. If that's jarring, `skip_delay` keeps a segment playing
+for that many seconds before skipping (so you can tell it was a sponsor), and
+`skip_end_margin` lands that many seconds before the segment ends (so you don't miss the
+start of the video coming back). For example `"skip_delay": 3, "skip_end_margin": 1`.
+Segments too short to leave anything to skip after both are applied are left to play.
+
 With `skip_count_tracking` on (the default), each skip tells SponsorBlock the segment was
 used, which reveals the video you watched along with your IP address. Set it to `false` if
 you'd rather not.
