@@ -1,15 +1,12 @@
-name: build rust docker image
+name: build
 
 on:
   push:
     branches:
       - '*'
-    paths:
-      - 'rust/**'
-      - '.github/workflows/build_rust_docker_image.yml'
+    tags:
+      - 'v*.*.*'
   pull_request:
-    paths:
-      - 'rust/**'
   workflow_dispatch:
 
 permissions:
@@ -19,9 +16,6 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: rust
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -42,7 +36,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/isponsorblocktv-rs
           tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
+            type=semver,pattern=v{{version}}
             type=ref,event=pr,prefix=pr-
             type=sha
 
@@ -59,7 +55,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
-          context: rust
+          context: .
           platforms: linux/amd64, linux/arm64, linux/arm/v7, linux/386, linux/arm/v6
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}

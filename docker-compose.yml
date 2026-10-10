@@ -1,6 +1,6 @@
 services:
   iSponsorBlockTV:
-    image: ghcr.io/dmunozv04/isponsorblocktv
+    image: ghcr.io/lparry-ai/isponsorblocktv-rs:latest
     container_name: iSponsorBlockTV
     restart: unless-stopped
     volumes:

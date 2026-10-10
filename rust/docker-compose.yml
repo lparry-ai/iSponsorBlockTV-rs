@@ -1,7 +1,0 @@
-services:
-  iSponsorBlockTV:
-    image: ghcr.io/lparry-ai/isponsorblocktv-rs:rust-port
-    container_name: iSponsorBlockTV
-    restart: unless-stopped
-    volumes:
-      - /PATH_TO_YOUR_DATA_DIR:/app/data

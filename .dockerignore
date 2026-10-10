@@ -1,9 +1,5 @@
-# Ignore files
-.dockerignore
-.gitignore
-.deepsource.toml
-.github
-
-Dockerfile
-docker-compose.yml
-README.md
+# Only what the Dockerfile copies
+*
+!Cargo.toml
+!Cargo.lock
+!src

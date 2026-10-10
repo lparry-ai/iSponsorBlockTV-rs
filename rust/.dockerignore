@@ -1,7 +1,0 @@
-target
-build
-*.md
-.gitignore
-.dockerignore
-Dockerfile
-docker-compose.yml

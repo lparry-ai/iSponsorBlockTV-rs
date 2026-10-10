@@ -1,6 +1,8 @@
 # Porting notes
 
-This crate is a hand port of the Python code below. When YouTube changes something and
+This crate is a hand port of the Python code below. The Python code has been removed from
+this repository, but the baseline commit is still in its history (it is the commit this fork
+branched from), so `git show 005d248:src/iSponsorBlockTV/main.py` etc. still work. When YouTube changes something and
 the Python project ships a fix, diff the upstream sources between the baseline recorded
 here and the new release, then apply the same change to the matching Rust module.
 
@@ -18,6 +20,8 @@ in `src/main.rs`). Update all three places when you re-port.
 
 ```bash
 # iSponsorBlockTV: what changed in the Python app since the baseline
+git remote add upstream https://github.com/dmunozv04/iSponsorBlockTV.git  # once
+git fetch upstream
 git diff 005d248 upstream/main -- src/iSponsorBlockTV requirements.txt
 
 # pyytlounge: compare the ported version against a newer one
@@ -25,6 +29,9 @@ pip download --no-deps --no-binary :all: pyytlounge==3.3.0 pyytlounge==<new> -d 
 cd /tmp/pyyt && for f in *.tar.gz; do tar xzf "$f"; done
 diff -ru pyytlounge-3.3.0/src/pyytlounge pyytlounge-<new>/src/pyytlounge
 ```
+
+Don't `git merge` upstream: this repository deleted the Python tree, so merges will conflict
+on every Python file. Diff and port by hand instead.
 
 Watch `requirements.txt` in iSponsorBlockTV: a `pyytlounge` version bump there is usually
 the first sign the Lounge protocol changed.

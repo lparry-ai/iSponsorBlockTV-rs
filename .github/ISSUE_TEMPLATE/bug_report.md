@@ -29,7 +29,7 @@ If applicable, add screenshots to help explain your problem.
 **iSponsorBlockTV server (please complete the following information):**
 
 - OS: [e.g. Docker on linux Arm64, windows]
-- Python version [e.g. 3.7] (no need to fill if running on docker
+- Version [output of `isponsorblocktv --version`] (no need to fill if running on docker
 
 **Apple TV (please complete the following information):**
 
