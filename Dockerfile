@@ -20,7 +20,7 @@ ENV CFLAGS_arm_unknown_linux_musleabi="-march=armv6" \
     CFLAGS_arm_unknown_linux_musleabihf="-march=armv6"
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/build,id=isponsorblocktv-target-$TARGETPLATFORM \
     xx-cargo build --release --locked --target-dir /src/build && \
     cp "/src/build/$(xx-cargo --print-target-triple)/release/isponsorblocktv" /isponsorblocktv && \
