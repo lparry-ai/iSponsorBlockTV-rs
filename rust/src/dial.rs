@@ -137,6 +137,7 @@ async fn find_youtube_app(
 
 /// Discover YouTube screens via DIAL. Results are de-duplicated by screen id.
 pub async fn discover(api: Arc<ApiHelper>, active: bool) -> Result<Vec<Discovered>> {
+    crate::init_tls();
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()

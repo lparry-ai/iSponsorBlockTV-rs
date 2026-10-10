@@ -32,6 +32,12 @@ struct Cli {
     /// Debug logging (equivalent to RUST_LOG=debug)
     #[arg(long, global = true)]
     debug: bool,
+    /// Legacy flag from the Python CLI (same as `setup`)
+    #[arg(long, hide = true)]
+    setup: bool,
+    /// Legacy flag from the Python CLI (same as `setup`)
+    #[arg(long = "setup-cli", hide = true)]
+    setup_cli: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -47,7 +53,14 @@ enum Command {
     Discover,
 }
 
+/// Use `ring` for TLS: it cross-compiles to every platform the Docker image targets.
+pub fn init_tls() {
+    // Errors only if a provider is already installed, which is fine.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 pub fn http_client(use_proxy: bool) -> Result<reqwest::Client> {
+    init_tls();
     let mut b = reqwest::Client::builder()
         .user_agent(concat!("iSponsorBlockTV-rs/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(15));
@@ -69,7 +82,14 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let data_dir = cli.data.unwrap_or_else(config::default_data_dir);
-    match cli.command.unwrap_or(Command::Start) {
+    if std::env::var_os("iSPBTV_docker").is_some() && !data_dir.exists() {
+        anyhow::bail!(
+            "Running in docker without mounting the data dir. Mount a volume at /app/data, see \
+             https://github.com/dmunozv04/iSponsorBlockTV/wiki/Installation#Docker"
+        );
+    }
+    let legacy_setup = (cli.setup || cli.setup_cli).then_some(Command::Setup);
+    match cli.command.or(legacy_setup).unwrap_or(Command::Start) {
         Command::Setup => setup::run(&data_dir).await,
         Command::Discover => {
             let config = Config::load(&data_dir)?;
