@@ -15,6 +15,9 @@ ARG TARGETPLATFORM
 RUN xx-apk add --no-cache musl-dev gcc
 
 WORKDIR /src
+# clang defaults the armv6 musl target to an older ISA than ring's assembly needs.
+ENV CFLAGS_arm_unknown_linux_musleabi="-march=armv6" \
+    CFLAGS_arm_unknown_linux_musleabihf="-march=armv6"
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
