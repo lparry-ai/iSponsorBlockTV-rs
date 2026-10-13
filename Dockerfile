@@ -8,7 +8,7 @@
 
 FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.6.1 AS xx
 
-FROM --platform=$BUILDPLATFORM rust:1.96-alpine AS builder
+FROM --platform=$BUILDPLATFORM rust:1.99-alpine AS builder
 COPY --from=xx / /
 RUN apk add --no-cache clang lld ca-certificates
 ARG TARGETPLATFORM
