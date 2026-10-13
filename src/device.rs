@@ -202,7 +202,7 @@ impl DeviceListener {
         }
         let id = &playback.video_id;
         if playback.state == STATE_PLAYING && !id.is_empty() && *id != st.last_title_id {
-            // Show the id now; the API lookup replaces it with the real title (needs apikey).
+            // Show the id now; the lookup replaces it with the real title and channel.
             st.last_title_id = id.clone();
             n.set_title(&self.screen_id, id);
             if let Some(old) = st.metadata_task.take() {

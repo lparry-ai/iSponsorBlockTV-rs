@@ -136,6 +136,14 @@ impl Notifier {
         } else {
             vec![]
         };
+        // Start every TV's skip counter at 0 (sent on connect) instead of "unknown".
+        {
+            let mut state = notifier.0.state.lock().unwrap();
+            for d in &config.devices {
+                let topic = notifier.device_topic(&d.screen_id, "segments_skipped");
+                state.insert(topic, "0".into());
+            }
+        }
         let device_count = config.devices.len();
         let run = tokio::spawn(notifier.clone().run(
             eventloop,
@@ -441,6 +449,12 @@ mod broker_tests {
         assert_eq!(last("isponsorblocktv/screen_abc/connected"), "ON");
         assert_eq!(last("isponsorblocktv/screen_abc/playback_state"), "playing");
         assert_eq!(last("isponsorblocktv/screen_abc/title"), "Some video");
+        assert_eq!(
+            seen["isponsorblocktv/screen_abc/segments_skipped"]
+                .first()
+                .unwrap(),
+            "0"
+        );
         assert_eq!(last("isponsorblocktv/screen_abc/segments_skipped"), "1");
         let event: Value = serde_json::from_str(&last("isponsorblocktv/screen_abc/event")).unwrap();
         assert_eq!(event["event_type"], "segment_skipped");

@@ -71,7 +71,11 @@ Protocol constants worth checking on every re-port: the app id `ytios-phone-20.1
 - **MQTT**: no setup-wizard prompts (configure `mqtt` in `config.json`); title/state
   updates are published before the cancellable segment fetch by construction; TLS uses
   the system CA store via the same verifier as the HTTP client; the "Home Assistant
-  enabled but MQTT disabled" notice isn't printed (it fired for every default config).
+  enabled but MQTT disabled" notice isn't printed (it fired for every default config);
+  title/channel fall back to YouTube oEmbed when there's no `apikey` (Python shows the
+  video id); `segments_skipped` is published as 0 at startup (Python leaves it unknown);
+  the skip's seek and reports run in their own task so the TV's post-seek state update
+  can't cancel them.
 - **New options** `skip_delay` and `skip_end_margin` (seconds, default 0 = upstream
   behaviour): play into a segment before skipping, and land before its end.
 

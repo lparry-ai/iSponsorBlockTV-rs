@@ -99,7 +99,9 @@ With `home_assistant.enabled`, it also publishes
 [MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery) configs,
 so Home Assistant creates one device per TV with a **Skips** event entity, **Title**,
 **Channel**, **State** and **Segments skipped** sensors and a **Connected** binary sensor,
-no YAML needed. Title and channel resolve from the video id only if `apikey` is set.
+no YAML needed. Title and channel are looked up with the YouTube Data API if `apikey` is
+set, otherwise with YouTube's keyless oEmbed endpoint. Segments skipped starts at 0 for each
+TV when the app starts.
 `ad_started` is only sent when `mute_ads` is on and `ad_skipped` only when `skip_ads` is on.
 With `tls`, the broker certificate is checked against the system CA store.
 

@@ -229,15 +229,45 @@ impl ApiHelper {
     }
 
     /// Search channels for the whitelist: returns `(id, title, subscriber count)`.
-    /// Resolve a video's title and channel via the YouTube Data API. Cached; None without
-    /// an API key, on any error, or if the video isn't found.
+    /// Resolve a video's title and channel: YouTube Data API when an API key is set,
+    /// otherwise (or if that fails) YouTube's keyless oEmbed endpoint. Cached; None on error.
     pub async fn get_video_metadata(&self, video_id: &str) -> Option<VideoMetadata> {
-        if self.apikey.is_empty() {
-            return None;
-        }
         if let Some(v) = self.metadata.lock().await.get(video_id) {
             return v;
         }
+        let mut meta = None;
+        if !self.apikey.is_empty() {
+            meta = self.metadata_from_data_api(video_id).await;
+        }
+        if meta.is_none() {
+            meta = self.metadata_from_oembed(video_id).await;
+        }
+        // Cache misses briefly so a transient failure is retried on the next play.
+        let ttl = meta.is_none().then_some(SEGMENT_TTL);
+        self.metadata.lock().await.put(video_id, meta.clone(), ttl);
+        meta
+    }
+
+    async fn metadata_from_oembed(&self, video_id: &str) -> Option<VideoMetadata> {
+        let url = format!("https://www.youtube.com/watch?v={video_id}");
+        let resp = self
+            .http
+            .get("https://www.youtube.com/oembed")
+            .query(&[("url", url.as_str()), ("format", "json")])
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let json: Value = resp.json().await.ok()?;
+        Some(VideoMetadata {
+            title: json["title"].as_str().map(String::from),
+            channel: json["author_name"].as_str().map(String::from),
+        })
+    }
+
+    async fn metadata_from_data_api(&self, video_id: &str) -> Option<VideoMetadata> {
         let resp = self
             .http
             .get(format!("{YOUTUBE_API}videos"))
@@ -250,12 +280,10 @@ impl ApiHelper {
             return None;
         }
         let snippet = &json["items"][0]["snippet"];
-        let meta = (!snippet.is_null()).then(|| VideoMetadata {
+        (!snippet.is_null()).then(|| VideoMetadata {
             title: snippet["title"].as_str().map(String::from),
             channel: snippet["channelTitle"].as_str().map(String::from),
-        });
-        self.metadata.lock().await.put(video_id, meta.clone(), None);
-        meta
+        })
     }
 
     pub async fn search_channels(&self, query: &str) -> Result<Vec<(String, String, String)>> {
@@ -449,5 +477,10 @@ mod live_tests {
         println!("segments: {segs:?}");
         assert!(!segs.is_empty());
         assert!(api.pair_with_code("000000000000").await.unwrap().is_none());
+        // No API key: title and channel come from oEmbed.
+        let meta = api.get_video_metadata("579MHCmgX7M").await.unwrap();
+        println!("metadata: {meta:?}");
+        assert!(meta.title.is_some_and(|t| !t.is_empty()));
+        assert!(meta.channel.is_some_and(|c| !c.is_empty()));
     }
 }
