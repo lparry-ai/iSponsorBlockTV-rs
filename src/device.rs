@@ -425,7 +425,7 @@ impl DeviceListener {
         }
     }
 
-    async fn process_playstatus(&self, state: PlaybackState, started: Instant) {
+    async fn process_playstatus(self: Arc<Self>, state: PlaybackState, started: Instant) {
         let mut segments = vec![];
         if !state.video_id.is_empty() {
             match self.api.get_segments(&state.video_id).await {
@@ -442,39 +442,50 @@ impl DeviceListener {
             if let Some((wait, target, seg)) =
                 self.next_skip(&segments, state.current_time, started)
             {
+                // Only the wait is cancellable (a newer playback state reschedules it). The
+                // seek makes the TV report a new state straight away, which would abort this
+                // task, so the skip itself runs as its own task and always completes.
                 tokio::time::sleep(wait).await;
-                tracing::info!("Skipping segment: seeking to {target}");
-                let (seek, _) = tokio::join!(
-                    self.lounge.seek_to(target),
-                    self.api.mark_viewed_segments(&seg.uuids)
+                let from = (seg.start + self.skip_delay).max(state.current_time);
+                tokio::spawn(
+                    self.clone()
+                        .perform_skip(state.video_id, seg, from, target)
+                        .in_current_span(),
                 );
-                if let Err(e) = seek {
-                    tracing::warn!("Seek failed: {e:#}");
-                } else if let Some(n) = &self.notifier {
-                    let from = (seg.start + self.skip_delay).max(state.current_time);
-                    let round = |x: f64| (x * 1000.0).round() / 1000.0;
-                    n.emit(
-                        "segment_skipped",
-                        &self.screen_id,
-                        &self.name,
-                        &[
-                            (
-                                "video_id",
-                                Some(state.video_id.as_str())
-                                    .filter(|v| !v.is_empty())
-                                    .map_or(Value::Null, Value::from),
-                            ),
-                            (
-                                "category",
-                                seg.category.clone().map_or(Value::Null, Value::from),
-                            ),
-                            ("skipped_from", Value::from(round(from))),
-                            ("skipped_to", Value::from(round(target))),
-                        ],
-                    );
-                }
             }
         }
+    }
+
+    /// Seek past a segment, then report it (MQTT event, SponsorBlock view count).
+    async fn perform_skip(self: Arc<Self>, video_id: String, seg: Segment, from: f64, target: f64) {
+        tracing::info!("Skipping segment: seeking to {target}");
+        if let Err(e) = self.lounge.seek_to(target).await {
+            tracing::warn!("Seek failed: {e:#}");
+            return;
+        }
+        if let Some(n) = &self.notifier {
+            let round = |x: f64| (x * 1000.0).round() / 1000.0;
+            n.emit(
+                "segment_skipped",
+                &self.screen_id,
+                &self.name,
+                &[
+                    (
+                        "video_id",
+                        Some(video_id.as_str())
+                            .filter(|v| !v.is_empty())
+                            .map_or(Value::Null, Value::from),
+                    ),
+                    (
+                        "category",
+                        seg.category.clone().map_or(Value::Null, Value::from),
+                    ),
+                    ("skipped_from", Value::from(round(from))),
+                    ("skipped_to", Value::from(round(target))),
+                ],
+            );
+        }
+        self.api.mark_viewed_segments(&seg.uuids).await;
     }
 
     /// Find the next segment to skip, how long to wait, and where to seek to.
