@@ -19,6 +19,21 @@ const RETRY: Duration = Duration::from_secs(10);
 const STATE_PLAYING: i64 = 1;
 const STATE_STOPPED: i64 = -1;
 
+/// ` "Title" (Channel)` for log lines, or empty if the title couldn't be resolved.
+fn video_label(meta: Option<crate::api::VideoMetadata>) -> String {
+    let Some(meta) = meta else {
+        return String::new();
+    };
+    let mut out = String::new();
+    if let Some(title) = meta.title.filter(|t| !t.is_empty()) {
+        out.push_str(&format!(" {title:?}"));
+    }
+    if let Some(channel) = meta.channel.filter(|c| !c.is_empty()) {
+        out.push_str(&format!(" ({channel})"));
+    }
+    out
+}
+
 /// Lounge playback state -> value of the MQTT `playback_state` sensor.
 fn playback_state_name(state: i64) -> &'static str {
     match state {
@@ -427,15 +442,26 @@ impl DeviceListener {
 
     async fn process_playstatus(self: Arc<Self>, state: PlaybackState, started: Instant) {
         let mut segments = vec![];
+        let mut label = String::new();
         if !state.video_id.is_empty() {
-            match self.api.get_segments(&state.video_id).await {
+            // Title lookup runs alongside the segment fetch and is capped, so it can't hold
+            // up a skip (the skip timing accounts for elapsed time anyway).
+            let (result, meta) = tokio::join!(
+                self.api.get_segments(&state.video_id),
+                tokio::time::timeout(
+                    Duration::from_secs(2),
+                    self.api.get_video_metadata(&state.video_id)
+                ),
+            );
+            match result {
                 Ok(s) => segments = s,
                 Err(e) => tracing::warn!("Failed to get segments for {}: {e:#}", state.video_id),
             }
+            label = video_label(meta.ok().flatten());
         }
         if state.state == STATE_PLAYING {
             tracing::info!(
-                "Playing video {} with {} segments",
+                "Playing video {}{label} with {} segments",
                 state.video_id,
                 segments.len()
             );
@@ -585,6 +611,23 @@ mod tests {
             next_skip(&[seg(0.0, 12.0)], 0.0, &timing(1.0, 0.0, 0.0, 0.0)).unwrap();
         assert_eq!(target, 12.0);
         assert_eq!(wait, Duration::ZERO);
+    }
+
+    #[test]
+    fn video_label_formats_title_and_channel() {
+        use crate::api::VideoMetadata;
+        let meta = |t: Option<&str>, c: Option<&str>| {
+            Some(VideoMetadata {
+                title: t.map(String::from),
+                channel: c.map(String::from),
+            })
+        };
+        assert_eq!(
+            video_label(meta(Some("A \"quoted\" title"), Some("Chan"))),
+            r#" "A \"quoted\" title" (Chan)"#
+        );
+        assert_eq!(video_label(meta(Some("T"), None)), r#" "T""#);
+        assert_eq!(video_label(None), "");
     }
 
     #[test]
