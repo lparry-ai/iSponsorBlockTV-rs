@@ -6,7 +6,7 @@
 # The builder runs on the host's architecture and cross-compiles a static musl binary
 # for each target (via tonistiigi/xx), so multi-arch builds don't need QEMU emulation.
 
-FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.6.1 AS xx
+FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.9.0 AS xx
 
 FROM --platform=$BUILDPLATFORM rust:1.96-alpine AS builder
 COPY --from=xx / /
