@@ -13,9 +13,24 @@ use tracing::Instrument;
 use crate::api::{ApiHelper, Segment};
 use crate::config::{Config, Device};
 use crate::lounge::{Event, Lounge};
+use crate::mqtt::Notifier;
 
 const RETRY: Duration = Duration::from_secs(10);
 const STATE_PLAYING: i64 = 1;
+const STATE_STOPPED: i64 = -1;
+
+/// Lounge playback state -> value of the MQTT `playback_state` sensor.
+fn playback_state_name(state: i64) -> &'static str {
+    match state {
+        -1 => "stopped",
+        0 => "buffering",
+        1 => "playing",
+        2 => "paused",
+        3 => "starting",
+        1081 => "advertisement",
+        _ => "unknown",
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 struct PlaybackState {
@@ -31,6 +46,11 @@ struct DeviceState {
     volume: HashMap<String, Value>,
     shorts_disconnected: bool,
     skip_task: Option<JoinHandle<()>>,
+    /// MQTT: video id whose title we last published ("" = idle).
+    last_title_id: String,
+    /// MQTT: last published playback_state.
+    last_playback_state: &'static str,
+    metadata_task: Option<JoinHandle<()>>,
 }
 
 pub struct DeviceListener {
@@ -47,6 +67,8 @@ pub struct DeviceListener {
     skip_ads: bool,
     auto_play: bool,
     state: Mutex<DeviceState>,
+    notifier: Option<Notifier>,
+    screen_id: String,
 }
 
 fn str_field<'a>(v: &'a Value, key: &str) -> &'a str {
@@ -66,6 +88,7 @@ impl DeviceListener {
         device: &Device,
         api: Arc<ApiHelper>,
         http: reqwest::Client,
+        notifier: Option<Notifier>,
     ) -> Arc<Self> {
         Arc::new(Self {
             lounge: Arc::new(Lounge::new(
@@ -85,6 +108,8 @@ impl DeviceListener {
                 playback_speed: 1.0,
                 ..Default::default()
             }),
+            notifier,
+            screen_id: device.screen_id.clone(),
         })
     }
 
@@ -131,7 +156,12 @@ impl DeviceListener {
                     lounge.screen_name().unwrap_or_default(),
                     self.name
                 );
-                if let Err(e) = lounge.subscribe(&tx).await {
+                if let Some(n) = &self.notifier {
+                    n.set_connected(&self.screen_id, true);
+                }
+                let result = lounge.subscribe(&tx).await;
+                self.publish_disconnected();
+                if let Err(e) = result {
                     tracing::debug!("Subscription ended: {e:#}");
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
@@ -139,6 +169,68 @@ impl DeviceListener {
         }
         .instrument(span)
         .await
+    }
+
+    /// MQTT: connection dropped -> connected OFF, blank title/channel, state stopped.
+    fn publish_disconnected(&self) {
+        let Some(n) = &self.notifier else { return };
+        n.set_connected(&self.screen_id, false);
+        n.set_title(&self.screen_id, "");
+        n.set_channel(&self.screen_id, "");
+        let mut st = self.st();
+        st.last_title_id.clear();
+        if st.last_playback_state != "stopped" {
+            st.last_playback_state = "stopped";
+            n.set_playback_state(&self.screen_id, "stopped");
+        }
+    }
+
+    fn emit_ad(&self, event_type: &str) {
+        if let Some(n) = &self.notifier {
+            n.emit(event_type, &self.screen_id, &self.name, &[]);
+        }
+    }
+
+    /// MQTT: update playback_state / title / channel for a new playback state.
+    fn publish_playback(&self, playback: &PlaybackState) {
+        let Some(n) = &self.notifier else { return };
+        let mut st = self.st();
+        let name = playback_state_name(playback.state);
+        if name != st.last_playback_state {
+            st.last_playback_state = name;
+            n.set_playback_state(&self.screen_id, name);
+        }
+        let id = &playback.video_id;
+        if playback.state == STATE_PLAYING && !id.is_empty() && *id != st.last_title_id {
+            // Show the id now; the API lookup replaces it with the real title (needs apikey).
+            st.last_title_id = id.clone();
+            n.set_title(&self.screen_id, id);
+            if let Some(old) = st.metadata_task.take() {
+                old.abort();
+            }
+            st.metadata_task = Some(self.resolve_metadata(n.clone(), id.clone()));
+        } else if !st.last_title_id.is_empty() && (playback.state == STATE_STOPPED || id.is_empty())
+        {
+            st.last_title_id.clear();
+            n.set_title(&self.screen_id, "");
+            n.set_channel(&self.screen_id, "");
+        }
+    }
+
+    fn resolve_metadata(&self, n: Notifier, video_id: String) -> JoinHandle<()> {
+        let api = self.api.clone();
+        let screen_id = self.screen_id.clone();
+        tokio::spawn(async move {
+            let Some(meta) = api.get_video_metadata(&video_id).await else {
+                return;
+            };
+            if let Some(title) = meta.title.filter(|t| !t.is_empty()) {
+                n.set_title(&screen_id, &title);
+            }
+            if let Some(channel) = meta.channel.filter(|c| !c.is_empty()) {
+                n.set_channel(&screen_id, &channel);
+            }
+        })
     }
 
     async fn refresh_auth_loop(self: Arc<Self>) {
@@ -214,9 +306,11 @@ impl DeviceListener {
             if self.mute_ads {
                 self.mute(false);
             }
+            self.emit_ad("ad_skipped");
         } else if self.mute_ads {
             tracing::info!("Ad has started, muting");
             self.mute(true);
+            self.emit_ad("ad_started");
         }
     }
 
@@ -238,6 +332,7 @@ impl DeviceListener {
                 if self.mute_ads && str_field(&data, "state") == "1" {
                     tracing::info!("Ad has ended, unmuting");
                     self.mute(false);
+                    self.emit_ad("ad_ended");
                 }
                 {
                     let mut st = self.st();
@@ -255,6 +350,7 @@ impl DeviceListener {
                         tracing::info!("Ad has ended, unmuting");
                         self.mute(false);
                     }
+                    self.emit_ad("ad_ended");
                 } else {
                     self.handle_ad(&data);
                 }
@@ -318,6 +414,8 @@ impl DeviceListener {
     fn on_playback_change(self: Arc<Self>) {
         let started = Instant::now();
         let playback = self.st().playback.clone();
+        // Before the (cancellable) segment fetch, so a newer state can't drop it.
+        self.publish_playback(&playback);
         let this = self.clone();
         let task = tokio::spawn(
             async move { this.process_playstatus(playback, started).await }.in_current_span(),
@@ -352,6 +450,28 @@ impl DeviceListener {
                 );
                 if let Err(e) = seek {
                     tracing::warn!("Seek failed: {e:#}");
+                } else if let Some(n) = &self.notifier {
+                    let from = (seg.start + self.skip_delay).max(state.current_time);
+                    let round = |x: f64| (x * 1000.0).round() / 1000.0;
+                    n.emit(
+                        "segment_skipped",
+                        &self.screen_id,
+                        &self.name,
+                        &[
+                            (
+                                "video_id",
+                                Some(state.video_id.as_str())
+                                    .filter(|v| !v.is_empty())
+                                    .map_or(Value::Null, Value::from),
+                            ),
+                            (
+                                "category",
+                                seg.category.clone().map_or(Value::Null, Value::from),
+                            ),
+                            ("skipped_from", Value::from(round(from))),
+                            ("skipped_to", Value::from(round(target))),
+                        ],
+                    );
                 }
             }
         }
@@ -425,6 +545,7 @@ mod tests {
             start,
             end,
             uuids: vec!["u".into()],
+            category: None,
         }
     }
 

@@ -19,6 +19,15 @@ pub struct Segment {
     pub start: f64,
     pub end: f64,
     pub uuids: Vec<String>,
+    /// SponsorBlock category (`sponsor`, `intro`, ...), reported in MQTT events.
+    pub category: Option<String>,
+}
+
+/// Title and channel of a video, for the MQTT sensors.
+#[derive(Clone, Debug)]
+pub struct VideoMetadata {
+    pub title: Option<String>,
+    pub channel: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +88,7 @@ pub struct ApiHelper {
     sponsorblock_api_url: String,
     segments: Mutex<Cache<Vec<Segment>>>,
     whitelisted: Mutex<Cache<bool>>,
+    metadata: Mutex<Cache<Option<VideoMetadata>>>,
 }
 
 impl ApiHelper {
@@ -97,6 +107,7 @@ impl ApiHelper {
             sponsorblock_api_url: config.sponsorblock_api_url.clone(),
             segments: Mutex::new(Cache::new(10)),
             whitelisted: Mutex::new(Cache::new(100)),
+            metadata: Mutex::new(Cache::new(100)),
         }
     }
 
@@ -218,6 +229,35 @@ impl ApiHelper {
     }
 
     /// Search channels for the whitelist: returns `(id, title, subscriber count)`.
+    /// Resolve a video's title and channel via the YouTube Data API. Cached; None without
+    /// an API key, on any error, or if the video isn't found.
+    pub async fn get_video_metadata(&self, video_id: &str) -> Option<VideoMetadata> {
+        if self.apikey.is_empty() {
+            return None;
+        }
+        if let Some(v) = self.metadata.lock().await.get(video_id) {
+            return v;
+        }
+        let resp = self
+            .http
+            .get(format!("{YOUTUBE_API}videos"))
+            .query(&[("id", video_id), ("key", &self.apikey), ("part", "snippet")])
+            .send()
+            .await
+            .ok()?;
+        let json: Value = resp.json().await.ok()?;
+        if json.get("error").is_some() {
+            return None;
+        }
+        let snippet = &json["items"][0]["snippet"];
+        let meta = (!snippet.is_null()).then(|| VideoMetadata {
+            title: snippet["title"].as_str().map(String::from),
+            channel: snippet["channelTitle"].as_str().map(String::from),
+        });
+        self.metadata.lock().await.put(video_id, meta.clone(), None);
+        meta
+    }
+
     pub async fn search_channels(&self, query: &str) -> Result<Vec<(String, String, String)>> {
         let json: Value = self
             .http
@@ -279,6 +319,7 @@ pub fn process_segments(raw: &Value, minimum_skip_length: f64) -> (Vec<Segment>,
         end: f64,
         uuid: String,
         locked: bool,
+        category: Option<String>,
     }
     let mut segs: Vec<Raw> = raw
         .as_array()
@@ -290,6 +331,7 @@ pub fn process_segments(raw: &Value, minimum_skip_length: f64) -> (Vec<Segment>,
                 end: s["segment"][1].as_f64()?,
                 uuid: s["UUID"].as_str()?.to_string(),
                 locked: s["locked"].as_i64() == Some(1),
+                category: s["category"].as_str().map(String::from),
             })
         })
         .collect();
@@ -321,6 +363,7 @@ pub fn process_segments(raw: &Value, minimum_skip_length: f64) -> (Vec<Segment>,
             start: s.start,
             end: s.end,
             uuids: vec![s.uuid.clone()],
+            category: s.category.clone(),
         };
         // Less than 1 second apart: combine with the previous one and skip them together.
         if let Some(prev) = out.pop_if(|prev| seg.start - prev.end < 1.0) {
@@ -369,7 +412,8 @@ mod tests {
             vec![Segment {
                 start: 50.0,
                 end: 60.0,
-                uuids: vec!["x".into()]
+                uuids: vec!["x".into()],
+                category: None,
             }]
         );
     }

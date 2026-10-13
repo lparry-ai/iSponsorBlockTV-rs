@@ -13,6 +13,12 @@ here and the new release, then apply the same change to the matching Rust module
 | iSponsorBlockTV (`src/iSponsorBlockTV/`) | 2.11.0 | commit `005d248` (2026-08-21, "Bump version") |
 | pyytlounge (PyPI, dependency of the above) | 3.3.0 | sdist `pyytlounge-3.3.0.tar.gz`, sha256 `d19aa1520214b87f67f930df9b977bcfd79ec7cf5e1d30f0805c33add844190a` |
 
+Additionally, MQTT / Home Assistant notifications (`src/mqtt.rs`, `src/homeassistant.rs`)
+are ported from Przemysław Szypowicz's branch
+<https://github.com/pszypowicz/iSponsorBlockTV/tree/feat/mqtt-notifications> at commit
+`9dc14e8` (2026-08-26, based on the same upstream baseline). It isn't merged upstream; if it
+is, diff the merged version against `9dc14e8`.
+
 The same baseline is compiled into the binary (`isponsorblocktv --version`, `PORTED_FROM`
 in `src/main.rs`). Update all three places when you re-port.
 
@@ -46,6 +52,8 @@ the first sign the Lounge protocol changed.
 | `src/dial.rs` | `iSponsorBlockTV/dial_client.py` |
 | `src/config.rs` | `iSponsorBlockTV/helpers.py` (`Config`, `Device`) |
 | `src/setup.rs` | `iSponsorBlockTV/config_setup.py` |
+| `src/mqtt.rs` | `notifications.py` (MQTT branch) |
+| `src/homeassistant.rs` | `homeassistant.py` (MQTT branch) |
 | `src/main.rs` | `iSponsorBlockTV/helpers.py` (CLI) + `main.py` (`main_async`, shutdown) |
 
 Protocol constants worth checking on every re-port: the app id `ytios-phone-20.15.1`, the
@@ -60,6 +68,10 @@ Protocol constants worth checking on every re-port: the app id `ytios-phone-20.1
 
 ## Intentional differences
 
+- **MQTT**: no setup-wizard prompts (configure `mqtt` in `config.json`); title/state
+  updates are published before the cancellable segment fetch by construction; TLS uses
+  the system CA store via the same verifier as the HTTP client; the "Home Assistant
+  enabled but MQTT disabled" notice isn't printed (it fired for every default config).
 - **New options** `skip_delay` and `skip_end_margin` (seconds, default 0 = upstream
   behaviour): play into a segment before skipping, and land before its end.
 

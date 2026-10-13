@@ -8,6 +8,12 @@ licenses require.
 <https://github.com/dmunozv04/iSponsorBlockTV>, copyright dmunozv04 and contributors,
 GNU General Public License v3 (see [LICENSE.md](LICENSE.md)).
 
+## MQTT / Home Assistant notifications
+
+<https://github.com/pszypowicz/iSponsorBlockTV/tree/feat/mqtt-notifications>, copyright
+Przemysław Szypowicz, GNU General Public License v3 (a fork of iSponsorBlockTV). Ported in
+`src/mqtt.rs` and `src/homeassistant.rs`.
+
 ## pyytlounge
 
 <https://github.com/FabioGNR/pyytlounge>, the YouTube Lounge API client ported in

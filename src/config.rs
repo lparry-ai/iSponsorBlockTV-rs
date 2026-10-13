@@ -82,9 +82,85 @@ pub struct Config {
     /// Seek to this many seconds before the segment ends (0 = skip to the very end).
     #[serde(default, deserialize_with = "nullable")]
     pub skip_end_margin: f64,
+    /// Optional MQTT / Home Assistant notifications (off by default).
+    #[serde(default, deserialize_with = "nullable")]
+    pub mqtt: MqttConfig,
     /// Unknown keys are kept so saving doesn't drop settings from other versions.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+fn port_1883() -> u16 {
+    1883
+}
+fn base_topic() -> String {
+    "isponsorblocktv".into()
+}
+fn discovery_prefix() -> String {
+    "homeassistant".into()
+}
+
+/// MQTT port as a number or numeric string (the Python version accepts both).
+fn port<'de, D: Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
+    use serde::de::Error;
+    match Option::<Value>::deserialize(d)? {
+        None | Some(Value::Null) => Ok(1883),
+        Some(Value::Number(n)) => n
+            .as_u64()
+            .and_then(|n| u16::try_from(n).ok())
+            .ok_or_else(|| D::Error::custom("mqtt.port must be between 1 and 65535")),
+        Some(Value::String(s)) => s
+            .trim()
+            .parse()
+            .map_err(|_| D::Error::custom("mqtt.port must be an integer")),
+        Some(_) => Err(D::Error::custom("mqtt.port must be an integer")),
+    }
+}
+
+/// `mqtt` block, same shape as the Python MQTT branch (see README).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MqttConfig {
+    #[serde(default, deserialize_with = "nullable")]
+    pub enabled: bool,
+    #[serde(default, deserialize_with = "nullable")]
+    pub broker: String,
+    #[serde(default = "port_1883", deserialize_with = "port")]
+    pub port: u16,
+    #[serde(default, deserialize_with = "nullable")]
+    pub username: String,
+    #[serde(default, deserialize_with = "nullable")]
+    pub password: String,
+    #[serde(default, deserialize_with = "nullable")]
+    pub tls: bool,
+    #[serde(default = "base_topic")]
+    pub base_topic: String,
+    #[serde(default, deserialize_with = "nullable")]
+    pub home_assistant: HomeAssistantConfig,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HomeAssistantConfig {
+    /// Publish MQTT discovery so Home Assistant creates entities (only if MQTT is enabled).
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    #[serde(default = "discovery_prefix")]
+    pub discovery_prefix: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for MqttConfig {
+    fn default() -> Self {
+        serde_json::from_str("{}").unwrap()
+    }
+}
+
+impl Default for HomeAssistantConfig {
+    fn default() -> Self {
+        serde_json::from_str("{}").unwrap()
+    }
 }
 
 impl Default for Config {
@@ -173,6 +249,14 @@ impl Config {
         if self.apikey.is_empty() && !self.channel_whitelist.is_empty() {
             bail!("No youtube API key found and channel whitelist is not empty");
         }
+        if self.mqtt.enabled {
+            if self.mqtt.broker.trim().is_empty() {
+                bail!("mqtt.enabled is true but mqtt.broker is empty");
+            }
+            if self.mqtt.port == 0 {
+                bail!("mqtt.port must be between 1 and 65535");
+            }
+        }
         if self.skip_categories.is_none() {
             println!("No categories found, using default: sponsor");
             self.skip_categories = Some(vec!["sponsor".into()]);
@@ -204,6 +288,32 @@ mod tests {
         let out = serde_json::to_value(&cfg).unwrap();
         assert_eq!(out["future_option"], "keep me");
         assert_eq!(out["devices"][0]["custom"], 1);
+    }
+
+    #[test]
+    fn mqtt_block_defaults_and_partial_config() {
+        let cfg: Config = serde_json::from_str(r#"{"devices":[{"screen_id":"x"}]}"#).unwrap();
+        assert!(!cfg.mqtt.enabled);
+        assert_eq!(cfg.mqtt.port, 1883);
+        assert_eq!(cfg.mqtt.base_topic, "isponsorblocktv");
+        assert!(cfg.mqtt.home_assistant.enabled);
+        assert_eq!(cfg.mqtt.home_assistant.discovery_prefix, "homeassistant");
+
+        let mut cfg: Config = serde_json::from_str(
+            r#"{"devices":[{"screen_id":"x"}],
+                "mqtt":{"enabled":true,"broker":"mqtt.lan","port":"8883","home_assistant":{"enabled":false}}}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.mqtt.port, 8883);
+        assert!(!cfg.mqtt.home_assistant.enabled);
+        assert_eq!(cfg.mqtt.home_assistant.discovery_prefix, "homeassistant");
+        cfg.validate().unwrap();
+
+        let mut cfg: Config =
+            serde_json::from_str(r#"{"devices":[{"screen_id":"x"}],"mqtt":{"enabled":true}}"#)
+                .unwrap();
+        assert!(cfg.validate().is_err());
+        assert!(serde_json::from_str::<Config>(r#"{"mqtt":{"port":70000}}"#).is_err());
     }
 
     #[test]

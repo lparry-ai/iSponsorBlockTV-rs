@@ -62,6 +62,51 @@ With `skip_count_tracking` on (the default), each skip tells SponsorBlock the se
 used, which reveals the video you watched along with your IP address. Set it to `false` if
 you'd rather not.
 
+## MQTT / Home Assistant
+
+Optional and off by default. Add an `mqtt` block to `config.json` (only `enabled` and
+`broker` are required; everything else shows its default):
+
+```json
+"mqtt": {
+    "enabled": true,
+    "broker": "mqtt.example.lan",
+    "port": 1883,
+    "username": "",
+    "password": "",
+    "tls": false,
+    "base_topic": "isponsorblocktv",
+    "home_assistant": {
+        "enabled": true,
+        "discovery_prefix": "homeassistant"
+    }
+}
+```
+
+Topics, with `<device>` being the device's screen id made topic-safe:
+
+| Topic | Retained | Payload |
+|---|---|---|
+| `<base_topic>/availability` | yes | `online` / `offline` (Last Will on unclean exit) |
+| `<base_topic>/<device>/event` | no | JSON event: `segment_skipped` (with `video_id`, `category`, `skipped_from`, `skipped_to`), `ad_started`, `ad_ended`, `ad_skipped` |
+| `<base_topic>/<device>/title` | yes | video title (the video id until resolved), empty when idle |
+| `<base_topic>/<device>/channel` | yes | channel name, empty when idle |
+| `<base_topic>/<device>/playback_state` | yes | `playing`, `paused`, `buffering`, `starting`, `advertisement`, `stopped`, `unknown` |
+| `<base_topic>/<device>/segments_skipped` | yes | count since start |
+| `<base_topic>/<device>/connected` | yes | `ON` / `OFF` |
+
+With `home_assistant.enabled`, it also publishes
+[MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery) configs,
+so Home Assistant creates one device per TV with a **Skips** event entity, **Title**,
+**Channel**, **State** and **Segments skipped** sensors and a **Connected** binary sensor,
+no YAML needed. Title and channel resolve from the video id only if `apikey` is set.
+`ad_started` is only sent when `mute_ads` is on and `ad_skipped` only when `skip_ads` is on.
+With `tls`, the broker certificate is checked against the system CA store.
+
+This feature is a port of
+[Przemysław Szypowicz's MQTT work](https://github.com/pszypowicz/iSponsorBlockTV/tree/feat/mqtt-notifications)
+for the Python version; topics, payloads and entities are the same.
+
 ## Development
 
 ```bash

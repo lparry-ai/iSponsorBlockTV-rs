@@ -4,7 +4,9 @@ mod api;
 mod config;
 mod device;
 mod dial;
+mod homeassistant;
 mod lounge;
+mod mqtt;
 mod setup;
 
 use std::path::PathBuf;
@@ -113,22 +115,31 @@ async fn start(data_dir: &std::path::Path) -> Result<()> {
     tracing::debug!("{PORTED_FROM}");
     let http = http_client(config.use_proxy)?;
     let api = Arc::new(ApiHelper::new(&config, http.clone()));
+    let notifier = mqtt::Notifier::start(&config);
     let devices: Vec<Arc<DeviceListener>> = config
         .devices
         .iter()
-        .map(|d| DeviceListener::new(&config, d, api.clone(), http.clone()))
+        .map(|d| DeviceListener::new(&config, d, api.clone(), http.clone(), notifier.clone()))
         .collect();
-    for d in &devices {
-        tokio::spawn(d.clone().run());
-    }
+    let tasks: Vec<_> = devices
+        .iter()
+        .map(|d| tokio::spawn(d.clone().run()))
+        .collect();
 
     shutdown_signal().await;
     println!("Cancelling tasks and exiting...");
+    // Stop the device loops first so they don't publish "disconnected" on the way out.
+    for t in &tasks {
+        t.abort();
+    }
     let disconnects = devices.iter().map(|d| {
         let lounge = d.lounge.clone();
         async move { tokio::time::timeout(Duration::from_secs(3), lounge.disconnect()).await }
     });
     futures_util::future::join_all(disconnects).await;
+    if let Some(n) = notifier {
+        n.stop().await;
+    }
     println!("Exited");
     Ok(())
 }
